@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { Nav, Dropdown } from "react-bootstrap";
 
@@ -10,120 +10,182 @@ import FlowerGood from "../../media/elements/flower_good.svg";
 
 import useAPI from "../../hooks/useAPI";
 import useHourly from "../../hooks/useHourly";
-import useHistory from "../../hooks/useHistory";
 import useCurrentLocation from "../../hooks/useCurrentLocation";
 import useLocationName from "../../hooks/useLocationName";
 import formatCurrentDate from "../../hooks/useFormattedDate";
+import { getWeatherAlert, getWeatherMeta } from "../../utils/weatherCode";
+
+const PRESET_LOCATIONS = {
+  Manchester: { latitude: 53.4808, longitude: -2.2426 },
+  Birmingham: { latitude: 52.4862, longitude: -1.8904 },
+  Bristol: { latitude: 51.4545, longitude: -2.5879 },
+  London: { latitude: 51.5074, longitude: 0.1278 },
+};
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+const formatTemperature = (value) =>
+  Number.isFinite(value) ? `${Math.round(value)}°C` : "--";
+
+const formatHour = (value) => {
+  if (!value) {
+    return "--:--";
+  }
+
+  return new Date(value).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
 
 export default function Home() {
   //apis for the location
-  const { location, errorL } = useCurrentLocation();
-  const { locationName, errorLN } = useLocationName(
+  const { location } = useCurrentLocation();
+  const { locationName: currentLocationName } = useLocationName(
     location?.latitude,
-    location?.longitude
-  ); // this is for example, just pass your city as prop to your component
-  const [city, setCity] = useState(locationName?.[0]?.name);
-
-  console.log("LOCATION NAME: ", locationName?.[0]?.name);
-
-  useEffect(() => {
-    setCity(locationName?.[0]?.name);
-  }, [locationName]);
-
-  const resetCity = () => {
-    setCity(locationName?.[0]?.name); // Set it to the default value
-  };
+    location?.longitude,
+  );
+  const [selectedLocation, setSelectedLocation] = useState("Current");
+  const activeLocation =
+    selectedLocation === "Current"
+      ? location
+      : PRESET_LOCATIONS[selectedLocation];
+  const activeLocationLabel =
+    selectedLocation === "Current"
+      ? currentLocationName?.[0]?.name || "Current Location"
+      : selectedLocation;
 
   const currentDate = formatCurrentDate();
 
   //weather api
-  const { data, error } = useAPI(location?.latitude, location?.longitude);
+  const { data } = useAPI(activeLocation?.latitude, activeLocation?.longitude);
+  const currentWeather = data?.current;
+  const currentWeatherMeta = getWeatherMeta(currentWeather?.weather_code);
 
   //various weather informaiton
-  const temp = parseInt(data?.main.temp);
-  const humidity = data?.main.humidity;
-  const wind = data?.wind.speed;
-  const description = data?.weather[0].main;
-  const icon = `https://openweathermap.org/img/wn/${data?.weather[0].icon}@2x.png`;
+  const temp = Number.isFinite(currentWeather?.temperature_2m)
+    ? Math.round(currentWeather.temperature_2m)
+    : null;
+  const humidity = Number.isFinite(currentWeather?.relative_humidity_2m)
+    ? currentWeather.relative_humidity_2m
+    : null;
+  const wind = Number.isFinite(currentWeather?.wind_speed_10m)
+    ? Math.round(currentWeather.wind_speed_10m)
+    : null;
+  const description = currentWeatherMeta.label;
+  const icon = currentWeatherMeta.icon;
 
   //using the hourly forecast
-  const { dataH, errorH } = useHourly(location?.latitude, location?.longitude);
-  const time = parseInt(dataH?.list[0].dt_txt.slice(11, 13));
-  const hourF1 = parseInt(dataH?.list[0].main.temp);
-  const hourF2 = parseInt(dataH?.list[1].main.temp);
-  const hourF3 = parseInt(dataH?.list[2].main.temp);
-
-  //icons for the furture hours
-  const iconF1 = `https://openweathermap.org/img/wn/${dataH?.list[0].weather[0].icon}@2x.png`;
-  const iconF2 = `https://openweathermap.org/img/wn/${dataH?.list[1].weather[0].icon}@2x.png`;
-  const iconF3 = `https://openweathermap.org/img/wn/${dataH?.list[2].weather[0].icon}@2x.png`;
-
-  // using the api for hours before
-  const { dataHis, errorHis } = useHistory(
-    location?.latitude,
-    location?.longitude
+  const { dataH } = useHourly(
+    activeLocation?.latitude,
+    activeLocation?.longitude,
   );
-
-  // temps for the hours before the current one
-  const hourH1 = parseInt(dataH?.list[24].main.temp);
-  const hourH2 = parseInt(dataHis?.list[23].main.temp);
-  const hourH3 = parseInt(dataHis?.list[22].main.temp);
-
-  //icons for the hours before the current one
-  const iconH1 = `https://openweathermap.org/img/wn/${dataHis?.list[24].weather[0].icon}@2x.png`;
-  const iconH2 = `https://openweathermap.org/img/wn/${dataHis?.list[23].weather[0].icon}@2x.png`;
-  const iconH3 = `https://openweathermap.org/img/wn/${dataHis?.list[22].weather[0].icon}@2x.png`;
+  const timeline =
+    dataH?.hourly?.time?.map((time, index) => ({
+      time,
+      temp: dataH?.hourly?.temperature_2m?.[index],
+      weatherCode: dataH?.hourly?.weather_code?.[index],
+      humidity: dataH?.hourly?.relative_humidity_2m?.[index],
+      precipitationProbability:
+        dataH?.hourly?.precipitation_probability?.[index],
+      soilMoisture: dataH?.hourly?.soil_moisture_0_to_1cm?.[index],
+    })) || [];
+  const currentIndex = timeline.findIndex(
+    (entry) => entry.time === dataH?.current?.time,
+  );
+  const resolvedCurrentIndex = currentIndex >= 0 ? currentIndex : 3;
+  const pastTimeline = timeline.slice(
+    Math.max(0, resolvedCurrentIndex - 3),
+    resolvedCurrentIndex,
+  );
+  const futureTimeline = timeline.slice(
+    resolvedCurrentIndex + 1,
+    resolvedCurrentIndex + 4,
+  );
+  const currentTimeline = timeline[resolvedCurrentIndex];
+  const nextTwelveHours = timeline.slice(
+    resolvedCurrentIndex,
+    resolvedCurrentIndex + 12,
+  );
 
   // differnet features for farmers
   const frosting =
-    temp <= 0 ? "High" : temp > 0 && temp < 4 ? "Moderate" : "Low";
-  const warningConditions = [
-    "thunderstorm with heavy rain",
-    "heavy thunderstorm",
-    "ragged thunderstorm",
-    "thunderstorm with heavy drizzle",
-    "heavy intensity drizzle",
-    "heavy intensity drizzle rain",
-    "heavy shower rain and drizzle",
-    "heavy intensity rain",
-    "very heavy rain",
-    "extreme rain",
-    "freezing rain",
-    "heavy intensity shower rain",
-    "ragged shower rain",
-    "heavy snow",
-    "sleet",
-    "shower sleet",
-    "rain and snow",
-    "shower snow",
-    "heavy shower snow",
-    "sand/dust whirls",
-    "squalls",
-    "tornado",
-  ];
-  const condition = data?.weather[0].description;
-  const alertWarning = warningConditions.includes(condition)
-    ? condition
-    : "None";
+    temp == null ? "--" : temp <= 0 ? "High" : temp < 4 ? "Moderate" : "Low";
+  const currentAlertWarning = getWeatherAlert(currentWeather?.weather_code);
+  const hasUpcomingSevereWeather = nextTwelveHours.some(
+    (entry) => getWeatherAlert(entry.weatherCode) !== "None",
+  );
+  const maxPrecipitationProbability = nextTwelveHours.length
+    ? Math.max(
+        ...nextTwelveHours.map((entry) =>
+          Number.isFinite(entry.precipitationProbability)
+            ? entry.precipitationProbability
+            : 0,
+        ),
+      )
+    : 0;
+  const alertWarning = hasUpcomingSevereWeather
+    ? "Severe conditions expected"
+    : currentAlertWarning;
 
-  //manually inputted by admin values based on location
-  const vwc = 30;
-  const pestInfection = 0;
+  const currentSoilMoisture = currentTimeline?.soilMoisture;
+  const vwc = Number.isFinite(currentSoilMoisture)
+    ? Math.round(currentSoilMoisture * 100)
+    : null;
 
-  //optimal temp is between 15 and 27
-  const tempPercentage = temp >= 15 && temp <= 27 ? 20 : 0;
-  const vwcPercentage = vwc == 30 ? 20 : 0;
-  const alertWarningPercentage = alertWarning == "None" ? 20 : 0;
-  const frostingPercentage = temp <= 0 ? 0 : temp > 0 && temp < 4 ? 10 : 20;
-  const pestInfectionPercentage = pestInfection <= 10 ? 20 : 0;
-  
-  // Calculate percentage based on various factors
-  const overallPecentage =
+  const minimumFutureTemp = futureTimeline.length
+    ? Math.min(
+        ...futureTimeline.map((entry) =>
+          Number.isFinite(entry.temp) ? entry.temp : Number.POSITIVE_INFINITY,
+        ),
+      )
+    : temp;
+
+  const averageHumidity = nextTwelveHours.length
+    ? nextTwelveHours.reduce(
+        (sum, entry) =>
+          sum + (Number.isFinite(entry.humidity) ? entry.humidity : 0),
+        0,
+      ) / nextTwelveHours.length
+    : humidity;
+
+  const pestInfection =
+    Number.isFinite(averageHumidity) && temp != null
+      ? clamp(
+          Math.round(
+            (averageHumidity - 55) * 0.9 +
+              clamp(maxPrecipitationProbability - 35, 0, 65) * 0.35 +
+              (temp >= 18 && temp <= 30 ? 18 : 5),
+          ),
+          0,
+          100,
+        )
+      : null;
+
+  const tempPercentage =
+    temp == null ? 0 : clamp(20 - Math.abs(temp - 21) * 2, 0, 20);
+  const vwcPercentage = vwc == null ? 0 : clamp(20 - Math.abs(vwc - 30), 0, 20);
+  const alertWarningPercentage = hasUpcomingSevereWeather
+    ? 0
+    : clamp(20 - maxPrecipitationProbability / 5, 4, 20);
+  const frostingPercentage =
+    minimumFutureTemp == null || minimumFutureTemp === Number.POSITIVE_INFINITY
+      ? 0
+      : minimumFutureTemp <= 0
+        ? 0
+        : minimumFutureTemp < 4
+          ? 10
+          : 20;
+  const pestInfectionPercentage =
+    pestInfection == null ? 0 : clamp(20 - pestInfection / 5, 0, 20);
+
+  const overallPercentage = Math.round(
     tempPercentage +
-    vwcPercentage +
-    alertWarningPercentage +
-    frostingPercentage +
-    pestInfectionPercentage;
+      vwcPercentage +
+      alertWarningPercentage +
+      frostingPercentage +
+      pestInfectionPercentage,
+  );
 
   return (
     <>
@@ -145,7 +207,7 @@ export default function Home() {
                     <div className="row w-100">
                       <div className="col col-sm-12 d-flex justify-content-center text-secondary">
                         <p className="display-0 m-0 text-shadow position-relative">
-                          {temp}°C
+                          {formatTemperature(temp)}
                         </p>
                       </div>
                       <div className="col col-sm-12 d-flex justify-content-center text-secondary text-center align-items-center text-shadow-sm">
@@ -159,7 +221,7 @@ export default function Home() {
                           </div>
                           <div className="col col-sm-4 text-center">|</div>
                           <div className="col col-sm-4 text-center">
-                            {wind}M/S
+                            {wind == null ? "--" : `${wind} km/h`}
                           </div>
                         </div>
                       </div>
@@ -171,7 +233,7 @@ export default function Home() {
                           </div>
                           <div className="col col-sm-4 text-center">|</div>
                           <div className="col col-sm-4 text-center">
-                            {humidity}%
+                            {humidity == null ? "--" : `${humidity}%`}
                           </div>
                         </div>
                       </div>
@@ -184,52 +246,56 @@ export default function Home() {
             <div className="col col-md-6 d-flex justify-content-center">
               <div className="row w-100 bg-image-1 border-30">
                 <div className="col col-sm-12 d-flex justify-content-around">
-                  {/* CARD-WEATHER 1 */}
-                  <div className="border-30 m-2 card-weather text-light d-flex flex-column justify-content-center align-items-center border-dark-tr">
-                    <span className="py-0">{hourH3}°C</span>
-                    <img src={iconH3} alt="cloudy" className="p-0 img-fluid" />
-                    <span className="p-0">{time - 4}:00</span>
-                  </div>
-                  {/* CARD-WEATHER 2 */}
-                  <div className="border-30 m-2 card-weather text-light d-flex flex-column justify-content-center align-items-center border-dark-tr">
-                    <span className="py-0">{hourH2}°C</span>
-                    <img src={iconH2} alt="cloudy" className="p-0 img-fluid" />
-                    <span className="p-0">{time - 3}:00</span>
-                  </div>
-                  {/* CARD-WEATHER 3 */}
-                  <div className="border-30 m-2 card-weather text-light d-flex flex-column justify-content-center align-items-center border-dark-tr">
-                    <span className="py-0">{hourH1}°C</span>
-                    <img
-                      src={iconH1}
-                      alt="cloudy"
-                      className="p-0 overflow-hidden img-fluid"
-                    />
-                    <span className="p-0">{time - 2}:00</span>
-                  </div>
+                  {pastTimeline.map((entry) => {
+                    const entryWeather = getWeatherMeta(entry.weatherCode);
+
+                    return (
+                      <div
+                        key={entry.time}
+                        className="border-30 mx-1 card-weather text-light d-flex flex-column justify-content-center align-items-center border-dark-tr"
+                      >
+                        <span className="py-0">
+                          {formatTemperature(entry.temp)}
+                        </span>
+                        <img
+                          src={entryWeather.icon}
+                          alt={entryWeather.description}
+                          className="p-0 img-fluid"
+                        />
+                        <span className="p-0">{formatHour(entry.time)}</span>
+                      </div>
+                    );
+                  })}
                   {/* ACTIVE CARD-WEATHER 4 A.K.A CURRENT HOUR ZONE */}
-                  <div className="border-30 m-2 card-weather-active w-100 p-2 text-light  d-flex flex-column justify-content-center align-items-center">
-                    <span>{temp}°C</span>
+                  <div className="border-30 mx-1 card-weather-active w-100 p-2 text-light d-flex flex-column justify-content-center align-items-center">
+                    <span>{formatTemperature(temp)}</span>
                     <img src={icon} alt="cloudy" className="img-fluid" />
-                    <span>{time - 1}:00</span>
+                    <span>
+                      {formatHour(
+                        currentTimeline?.time || currentWeather?.time,
+                      )}
+                    </span>
                   </div>
-                  {/* CARD-WEATHER 5 */}
-                  <div className="border-30 m-2 card-weather text-light d-flex flex-column justify-content-center align-items-center border-dark-tr">
-                    <span className="py-0 img-fluid">{hourF1}°C</span>
-                    <img src={iconF1} alt="cloudy" className="p-0 img-fluid" />
-                    <span className="p-0">{time}:00</span>
-                  </div>
-                  {/* CARD-WEATHER 6 */}
-                  <div className="border-30 m-2 card-weather text-light d-flex flex-column justify-content-center align-items-center border-dark-tr">
-                    <span className="py-0">{hourF2}°C</span>
-                    <img src={iconF2} alt="cloudy" className="p-0 img-fluid" />
-                    <span className="p-0">{time + 1}:00</span>
-                  </div>
-                  {/* CARD-WEATHER 7 */}
-                  <div className="border-30 m-2 card-weather text-light d-flex flex-column justify-content-center align-items-center border-dark-tr">
-                    <span className="py-0">{hourF3}°C</span>
-                    <img src={iconF3} alt="cloudy" className="p-0 img-fluid" />
-                    <span className="p-0">{time + 2}:00</span>
-                  </div>
+                  {futureTimeline.map((entry) => {
+                    const entryWeather = getWeatherMeta(entry.weatherCode);
+
+                    return (
+                      <div
+                        key={entry.time}
+                        className="border-30 mx-1 card-weather text-light d-flex flex-column justify-content-center align-items-center border-dark-tr"
+                      >
+                        <span className="py-0">
+                          {formatTemperature(entry.temp)}
+                        </span>
+                        <img
+                          src={entryWeather.icon}
+                          alt={entryWeather.description}
+                          className="p-0 img-fluid"
+                        />
+                        <span className="p-0">{formatHour(entry.time)}</span>
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="col col-sm-12 container-fluid text-light">
                   <div className="row justify-content-center">
@@ -243,26 +309,37 @@ export default function Home() {
                                 variant="success"
                                 id="dropdown-basic"
                               >
-                                <span className="h4">{city}</span>
+                                <span className="h4">
+                                  {activeLocationLabel}
+                                </span>
                               </Dropdown.Toggle>
                               <Dropdown.Menu className="d-column justify-content-center text-center dropdown-menu-dark w-100">
-                                <Dropdown.Item onClick={resetCity}>
+                                <Dropdown.Item
+                                  onClick={() => setSelectedLocation("Current")}
+                                >
                                   Current
                                 </Dropdown.Item>
                                 <Dropdown.Item
-                                  onClick={() => {
-                                    setCity("Manchester");
-                                  }}
+                                  onClick={() =>
+                                    setSelectedLocation("Manchester")
+                                  }
                                 >
                                   Manchester
                                 </Dropdown.Item>
                                 <Dropdown.Item
-                                  onClick={() => setCity("Birmingham")}
+                                  onClick={() => setSelectedLocation("London")}
+                                >
+                                  London
+                                </Dropdown.Item>
+                                <Dropdown.Item
+                                  onClick={() =>
+                                    setSelectedLocation("Birmingham")
+                                  }
                                 >
                                   Birmingham
                                 </Dropdown.Item>
                                 <Dropdown.Item
-                                  onClick={() => setCity("Bristol")}
+                                  onClick={() => setSelectedLocation("Bristol")}
                                 >
                                   Bristol
                                 </Dropdown.Item>
@@ -273,10 +350,16 @@ export default function Home() {
                         <div className="row p-0">
                           <div className="col col-sm-7 container-fluid">
                             <div className="row p-0">
-                              <p>Average Temperature: {temp}°</p>
+                              <p>
+                                Average Temperature:{" "}
+                                {temp == null ? "--" : `${temp}°`}
+                              </p>
                             </div>
                             <div className="row p-0">
-                              <p>Volumetric Water Content (VWC): 20-40</p>
+                              <p>
+                                Volumetric Water Content (VWC):{" "}
+                                {vwc == null ? "--" : `${vwc}%`}
+                              </p>
                             </div>
                             <div className="row p-0">
                               <p>Warnings/Alerts: {alertWarning}</p>
@@ -285,7 +368,12 @@ export default function Home() {
                               <p>Chance of Frosting: {frosting}</p>
                             </div>
                             <div className="row p-0">
-                              <p>Pest Infection Level: 0%</p>
+                              <p>
+                                Pest Infection Level:{" "}
+                                {pestInfection == null
+                                  ? "--"
+                                  : `${pestInfection}%`}
+                              </p>
                             </div>
                           </div>
                           <div className="col col-sm-1 d-flex justify-content-center p-0 p-0 m-0">
@@ -309,7 +397,7 @@ export default function Home() {
                                 </div>
                                 <div className="col col-md-12 d-flex align-items-center justify-content-center">
                                   <p className="text-secondary text-shadow h4">
-                                    {overallPecentage}%
+                                    {overallPercentage}%
                                   </p>
                                 </div>
                               </div>
@@ -325,7 +413,7 @@ export default function Home() {
           </div>
         </div>
       </div>
-      <div className="row px-2 pt-0">
+      <div className="row px-2 py-0">
         {/* LINKS SECTION */}
         <div className="col col-sm-12 bg-primary p-0 border-30">
           <div className="container-fluid">
@@ -351,6 +439,13 @@ export default function Home() {
                 </div>
               </Nav.Link>
             </div>
+          </div>
+        </div>
+      </div>
+      <div className="row pb-2">
+        <div className="col col-sm-12">
+          <div className="home-copyright text-center">
+            <p className="mb-0 text-dark">&copy; 2024 Daniil Zhelyazkov</p>
           </div>
         </div>
       </div>
